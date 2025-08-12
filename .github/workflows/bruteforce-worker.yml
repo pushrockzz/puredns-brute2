@@ -58,9 +58,8 @@ jobs:
 
       - name: Download Full Chunks Package from Primary Account
         env:
-          # This secret MUST be configured in this secondary repo.
-          # It's a PAT from the primary account with `actions:read` permissions.
-          GH_TOKEN: ${{ secrets.PAT_FOR_PRIMARY_ACCOUNT_READ }}
+          # This secret must be configured in the repository where this workflow runs
+          GH_TOKEN_PRIMARY_ACCOUNT_READ: ${{ secrets.PAT_FOR_PRIMARY_ACCOUNT_READ }}
           PRIMARY_REPO: ${{ github.event.inputs.primary_repo_owner }}/${{ github.event.inputs.primary_repo_name }}
           PRIMARY_RUN_ID: ${{ github.event.inputs.primary_run_id }}
           ARTIFACT_NAME: ${{ github.event.inputs.chunk_package_artifact_name }}
@@ -68,27 +67,35 @@ jobs:
         run: |
           echo "WORKER: Downloading artifact '$ARTIFACT_NAME' from '$PRIMARY_REPO', run ID '$PRIMARY_RUN_ID'"
           
-          # Check for gh CLI and install if not present (common in custom containers)
+          # Check for gh CLI and install if not present
           if ! command -v gh &> /dev/null; then
             echo "INFO: gh CLI not found. Installing..."
-            apt-get update -qy && apt-get install -qy curl && \
+            (apt-get update -qy && apt-get install -qy curl && \
             curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
             chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
             echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
-            apt-get update -qy && apt-get install -qy gh
+            apt-get update -qy && apt-get install -qy gh) || { echo "::error:: gh CLI installation failed."; exit 0; }
           fi
 
           if ! command -v gh &> /dev/null; then
-            echo "::error:: gh CLI installation failed."
+            echo "::error:: gh CLI is not available after attempting installation."
             exit 0
           fi
-          
-          # Use gh to download the artifact from the triggering repository
+
+          # CRITICAL FIX: Explicitly log in to GitHub using the provided PAT.
+          # This ensures the subsequent 'gh' command is properly authenticated.
+          echo "$GH_TOKEN_PRIMARY_ACCOUNT_READ" | gh auth login --with-token
+          if [ $? -ne 0 ]; then
+             echo "::error:: gh auth login failed. The PAT may be incorrect or lack necessary permissions."
+             exit 0
+          fi
+
+          # Now, this download command will use the authenticated session
           gh run download "$PRIMARY_RUN_ID" -R "$PRIMARY_REPO" -n "$ARTIFACT_NAME" --dir .
           
           PACKAGE_FILENAME="$ARTIFACT_NAME.tar.gz"
           if [ ! -f "$PACKAGE_FILENAME" ]; then
-            echo "::error:: Failed to download '$PACKAGE_FILENAME'."
+            echo "::error:: Failed to download '$PACKAGE_FILENAME'. The artifact may not exist or the name is incorrect."
             exit 0
           fi
           echo "SUCCESS: Downloaded '$PACKAGE_FILENAME'."
