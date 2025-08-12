@@ -23,7 +23,6 @@ on:
         description: 'The name of the artifact package.'
         required: true
         type: string
-      # The key that MUST match what the primary workflow sends
       secondary_matrix_json:
         description: 'The JSON string for the matrix assigned to this worker.'
         required: true
@@ -32,10 +31,6 @@ on:
 permissions:
   contents: write # For checkout
   actions: read   # To read artifacts from another repo
-
-env:
-  # Max parallel jobs this secondary account will run for a single trigger
-  WORKER_MAX_PARALLEL: 20
 
 jobs:
   process_assigned_chunks:
@@ -52,7 +47,7 @@ jobs:
       max-parallel: 20
       # The matrix is populated by the JSON string passed from the primary workflow
       matrix:
-        pair: ${{ fromJson(github.event.inputs.secondary_matrix_json || '[]') }}
+        pair: ${{ fromJson(github.event.inputs.secondary_matrix_json && github.event.inputs.secondary_matrix_json || '[]') }}
     steps:
       - name: Display Trigger Payload (Debug)
         run: |
