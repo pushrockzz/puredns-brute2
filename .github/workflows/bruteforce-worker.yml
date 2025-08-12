@@ -23,7 +23,7 @@ on:
         description: 'The name of the artifact package (e.g., bruteforce-package-...).'
         required: true
         type: string
-      worker_matrix_json:
+      secondary_matrix_json:
         description: 'The JSON string representing the matrix of chunks assigned to this worker.'
         required: true
         type: string
