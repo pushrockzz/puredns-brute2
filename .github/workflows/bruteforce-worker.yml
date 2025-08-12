@@ -1,4 +1,4 @@
-name: Puredns Bruteforce Worker
+name: Puredns Bruteforce Worker (Secondary)
 
 on:
   workflow_dispatch:
