@@ -114,31 +114,30 @@ jobs:
           echo "SUCCESS: Extraction complete."
 
       # --- This is the core logic that matches the primary worker ---
-      - name: Run puredns bruteforce on assigned chunk
+      - name: Run puredns bruteforce on (domain, chunk) pair
         shell: bash
         run: |
+        
+          # Get the specific domain and chunk for this matrix job
+          
+          DOMAIN="${{ matrix.pair.domain }}"
           CHUNK_FILE="${{ matrix.pair.chunk }}"
-          echo "WORKER: Starting puredns bruteforce on chunk '$CHUNK_FILE'..."
+          PUREDNS_RESULT="$(mktemp)"
 
-          if [ ! -f "$CHUNK_FILE" ]; then
-            echo "::error:: Assigned chunk file '$CHUNK_FILE' not found!"
-            exit 0 # This is a critical failure for this matrix job
-          fi
+          echo "INFO: This runner will process chunk '$CHUNK_FILE' against domain '$DOMAIN'."
           
-          puredns bruteforce "$CHUNK_FILE" -d targets.txt \
-            -r resolvers-trusted.txt \
-            --skip-validation \
-            --skip-wildcard-filter \
-            --rate-limit 5000 \
-            --write "puredns_results.txt" \
-            --quiet
+          # The puredns command now takes a single domain as an argument
           
-          # Ensure an artifact is always created, even if there are no results
+          cat "$CHUNK_FILE" | puredns bruteforce "$DOMAIN" -r resolvers-trusted.txt --skip-validation --skip-wildcard-filter --rate-limit 5000 --write "$PUREDNS_RESULT"
+
+          cat "$PUREDNS_RESULT" | sort -u > puredns_results.txt
+          # Ensure artifact upload doesn't fail if no results are found
+          
           if [ ! -s "puredns_results.txt" ]; then
-            echo "INFO: No subdomains found for this chunk."
+            echo "INFO: No results found for this pair."
             touch puredns_results.txt
           else
-            echo "SUCCESS: Found $(wc -l < puredns_results.txt) subdomains in this chunk."
+            echo "SUCCESS: Found $(wc -l < puredns_results.txt) subdomains for $DOMAIN."
           fi
 
       - name: Create Safe Chunk Name for Artifact
