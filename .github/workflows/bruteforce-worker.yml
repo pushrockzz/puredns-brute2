@@ -48,7 +48,7 @@ jobs:
         password: ${{ secrets.GHCR_TOKEN }}
     strategy:
       fail-fast: false
-      max-parallel: ${{ env.WORKER_MAX_PARALLEL }}
+      max-parallel: 20
       # The matrix is populated by the JSON string passed from the primary workflow
       matrix:
         pair: ${{ fromJson(github.event.inputs.worker_matrix_json || '[]') }}
