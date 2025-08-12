@@ -1,1 +1,139 @@
+#
+# bruteforce-worker.yml
+#
+# This workflow acts as a secondary or tertiary worker for the main puredns-bruteforce
+# workflow. It is triggered remotely, downloads a package of wordlist chunks and targets,
+# processes its assigned chunks in parallel, and uploads the results.
+#
 
+name: Bruteforce Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      primary_repo_owner:
+        description: 'The owner of the primary repository.'
+        required: true
+        type: string
+      primary_repo_name:
+        description: 'The name of the primary repository.'
+        required: true
+        type: string
+      primary_run_id:
+        description: 'The run ID of the triggering workflow in the primary repository.'
+        required: true
+        type: string
+      chunk_package_artifact_name:
+        description: 'The name of the artifact package to download.'
+        required: true
+        type: string
+      worker_matrix_json:
+        description: 'The JSON string representing the matrix of chunks assigned to this worker.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  process_bruteforce_chunks:
+    name: Process Assigned Bruteforce Chunks
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pcoder7/spider-puredns-actions:latest
+      credentials:
+        # These secrets must be configured in the secondary/tertiary account's repository
+        username: ${{ secrets.GHCR_USER }}
+        password: ${{ secrets.GHCR_TOKEN }}
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      # Takes the JSON string from the input and creates a parallel job for each chunk
+      matrix:
+        pair: ${{ fromJson(github.event.inputs.worker_matrix_json) }}
+    steps:
+      - name: Checkout repository (Worker's own repo)
+        uses: actions/checkout@v3
+
+      - name: Download Bruteforce Package from Primary Account
+        env:
+          # This secret must contain a PAT from the primary account with `actions:read` scope
+          GH_TOKEN_PRIMARY_ACCOUNT_READ: ${{ secrets.PAT_FOR_PRIMARY_ACCOUNT_ARTIFACTS_READ }}
+          PRIMARY_REPO: ${{ github.event.inputs.primary_repo_owner }}/${{ github.event.inputs.primary_repo_name }}
+          PRIMARY_RUN_ID: ${{ github.event.inputs.primary_run_id }}
+          ARTIFACT_NAME: ${{ github.event.inputs.chunk_package_artifact_name }}
+        shell: bash
+        run: |
+          echo "WORKER: Downloading artifact '$ARTIFACT_NAME' from '$PRIMARY_REPO', run ID '$PRIMARY_RUN_ID'."
+          
+          # Install gh CLI if not present in the container
+          if ! command -v gh &> /dev/null; then
+            apt-get update -qy && apt-get install -qy curl && \
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+            chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+            apt-get update -qy && apt-get install -qy gh
+          fi
+          
+          echo "$GH_TOKEN_PRIMARY_ACCOUNT_READ" | gh auth login --with-token
+          gh run download "$PRIMARY_RUN_ID" -R "$PRIMARY_REPO" -n "$ARTIFACT_NAME" --dir .
+          
+          PACKAGE_FILENAME="$ARTIFACT_NAME.tar.gz"
+          if [ ! -f "$PACKAGE_FILENAME" ]; then
+            echo "::error:: Failed to download '$PACKAGE_FILENAME' from primary workflow."
+            exit 0
+          fi
+          echo "WORKER: Download successful."
+
+      - name: Extract Bruteforce Package
+        shell: bash
+        run: |
+          PACKAGE_FILENAME="${{ github.event.inputs.chunk_package_artifact_name }}.tar.gz"
+          echo "WORKER: Extracting $PACKAGE_FILENAME..."
+          tar -xzvf "$PACKAGE_FILENAME"
+          if [ ! -d "chunks" ] || [ ! -f "targets.txt" ]; then
+            echo "::error:: 'chunks/' or 'targets.txt' missing after extraction."
+            exit 0
+          fi
+          echo "WORKER: Extraction complete."
+
+      # --- This is the core work step, adapted for bruteforcing ---
+      - name: Run puredns bruteforce on assigned chunk
+        shell: bash
+        run: |
+          CHUNK_FILE="${{ matrix.pair.chunk }}"
+          echo "WORKER: Starting puredns bruteforce with chunk '$CHUNK_FILE'."
+
+          puredns bruteforce "$CHUNK_FILE" targets.txt \
+            -r resolvers.txt \
+            --skip-validation \
+            --skip-wildcard-filter \
+            --rate-limit 3000 \
+            --write "puredns_results.txt" \
+            --quiet
+          
+          echo "WORKER: Bruteforce completed for chunk '$CHUNK_FILE'."
+
+          # Ensure an artifact is always created, even if there are no results
+          if [ ! -s "puredns_results.txt" ]; then
+            echo "WORKER: No subdomains found for this chunk."
+            touch puredns_results.txt
+          else
+            echo "WORKER: Found $(wc -l < puredns_results.txt) subdomains."
+          fi
+
+      - name: Create Safe Chunk Name for Artifact
+        id: safe_name
+        shell: bash
+        run: |
+          SAFE_CHUNK_NAME=$(echo "${{ matrix.pair.chunk }}" | tr '/' '_')
+          echo "safe_chunk_name=$SAFE_CHUNK_NAME" >> $GITHUB_OUTPUT
+
+      # --- The artifact name must match the pattern the primary merge job expects ---
+      - name: Upload Worker Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bruteforce-results-secondary-${{ steps.safe_name.outputs.safe_chunk_name }}
+          path: puredns_results.txt
+          retention-days: 1
