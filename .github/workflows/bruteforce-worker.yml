@@ -125,7 +125,7 @@ jobs:
             exit 0 # This is a critical failure for this matrix job
           fi
           
-          puredns bruteforce "$CHUNK_FILE" targets.txt \
+          puredns bruteforce "$CHUNK_FILE" -d targets.txt \
             -r resolvers-trusted.txt \
             --skip-validation \
             --skip-wildcard-filter \
