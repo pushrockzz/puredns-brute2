@@ -104,8 +104,8 @@ jobs:
           echo "WORKER: Extracting $PACKAGE_FILENAME..."
           tar -xzvf "$PACKAGE_FILENAME"
           # Verify that the core components for the bruteforce exist
-          if [ ! -d "chunks" ] || [ ! -f "targets.txt" ] || [ ! -f "resolvers.txt" ]; then
-            echo "::error:: 'chunks/', 'targets.txt', or 'resolvers.txt' missing after extraction."
+          if [ ! -d "chunks" ] || [ ! -f "targets.txt" ] || [ ! -f "resolvers-trusted.txt" ]; then
+            echo "::error:: 'chunks/', 'targets.txt', or 'resolvers-trusted.txt' missing after extraction."
             exit 0
           fi
           echo "SUCCESS: Extraction complete."
