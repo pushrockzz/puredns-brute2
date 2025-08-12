@@ -3,6 +3,10 @@ name: Puredns Bruteforce Worker
 on:
   workflow_dispatch:
     inputs:
+      primary_github_server_url:
+        description: 'The server URL of the primary GitHub instance (e.g., https://github.com)'
+        required: true
+        type: string
       primary_repo_owner:
         description: 'The owner of the primary repository.'
         required: true
