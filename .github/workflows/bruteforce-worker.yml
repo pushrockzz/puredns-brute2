@@ -51,7 +51,7 @@ jobs:
       max-parallel: 20
       # The matrix is populated by the JSON string passed from the primary workflow
       matrix:
-        pair: ${{ fromJson(github.event.inputs.worker_matrix_json || '[]') }}
+        pair: ${{ fromJson(github.event.inputs.secondary_matrix_json || '[]') }}
     steps:
       - name: Display Trigger Payload (Debug)
         run: |
