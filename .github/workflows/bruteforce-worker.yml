@@ -187,7 +187,7 @@ jobs:
           
           echo "✅ PureDNS resolution complete. $(wc -l < "$PUREDNS_FILE") subdomains were successfully resolved."
                  
-          wget https://raw.githubusercontent.com/Pcoder7/puredns-bruteforce/refs/heads/main/.scope
+          wget -qO .scope https://raw.githubusercontent.com/Pcoder7/puredns-bruteforce/refs/heads/main/.scope
           
           echo "Checking scope file for '$DOMAIN'..."
           cat .scope | head -n5
