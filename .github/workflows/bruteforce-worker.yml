@@ -247,16 +247,42 @@ jobs:
           echo "▶ Filtering non‑CDN IPs with cut-cdn…"
           cat "$TMP_IP_ONLY" | cut-cdn -ua -t 50 -silent -o "$TMP_NONCDN"
 
+          
+          echo "✅ All done. TMP_IP_ONLY contains $(wc -l < "$TMP_IP_ONLY") IP"
+          head -n5 "$TMP_IP_ONLY"
+
+          echo "==================================================================="
+          echo "✅ All done. TMP_NONCDN contains $(wc -l < "$TMP_NONCDN") IP"
+          head -n5 "$TMP_NONCDN"
+          echo "==================================================================="
+          
           echo "▶ Deriving CDN IP list…"
           cat "$TMP_IP_ONLY" | anew -d "$TMP_NONCDN" > "$TMP_CDN"
-
+          
+          echo "✅ All done. TMP_CDN contains $(wc -l < "$TMP_CDN") IP"
+          head -n5 "$TMP_CDN"
+          
+          echo "==================================================================="
+          
           echo "▶ Running rustscan on non‑CDN IPs…"
+
+          smap -iL "$TMP_NONCDN" -oP "$TMP_SMAP_NONCDN" || true
           rustscan -a "$TMP_NONCDN" -p 80,443 --no-banner -t 1000 --tries 1 -u 20000 --scan-order "Random" -b 100 --greppable --accessible > "$TMP_RUSTSCAN" || true
           cat "$TMP_RUSTSCAN" | awk -F ' -> ' '{ gsub(/[\[\]]/, "", $2); n = split($2, p, ","); for(i=1;i<=n;i++) print $1 ":" p[i] }' | anew -q "$TMP_SMAP_NONCDN" || true
+
+          echo "✅ All done. TMP_SMAP_NONCDN contains $(wc -l < "$TMP_SMAP_NONCDN") IP" 
+          echo "==================================================================="
+          head -n50 "$TMP_SMAP_NONCDN"
+          echo "==================================================================="
           
           echo "▶ Merging non‑CDN and CDN IP lists into $SMAP_FILE…"
           cat "$TMP_SMAP_NONCDN" "$TMP_CDN" | sort -u > "$SMAP_FILE"
-
+         
+          echo "✅ All done. SMAP_FILE contains $(wc -l < "$SMAP_FILE") IP" 
+          echo "==================================================================="
+          head -n50 "$SMAP_FILE"
+          echo "==================================================================="
+          
           echo "▶ Joining with $SMAP_FILE to produce final output..."
           awk -F: '
             NF==2 { print $1, $2 }
@@ -278,6 +304,9 @@ jobs:
             > "$OUTPUT"
 
           echo "✅ Generated $OUTPUT with $(wc -l < $OUTPUT) entries."
+
+          head -n50 "$OUTPUT"
+          
           rm -f "$TMP_IP2SUB" "$TMP_IP_ONLY" "$TMP_NONCDN" "$TMP_CDN" "$TMP_SMAP_NONCDN" "$TMP_RUSTSCAN"
 
       - name: Sort Resolved Results into Root Domain Folders
