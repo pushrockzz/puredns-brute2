@@ -166,9 +166,6 @@ jobs:
           MASSDNS="massdns.txt"
           MASSDNS_FILE="massdns_file.txt"
           TMP_CLEANMASSDNS=$(mktemp)
-
-          echo "Checking scope file for '$DOMAIN'..."
-          cat .scope | head -n5
           
           echo "INFO: Resolving subdomains for '$DOMAIN' using chunk '$CHUNK_FILE'..."
           # The puredns command is now updated with --write-massdns
@@ -189,12 +186,13 @@ jobs:
           fi
           
           echo "✅ PureDNS resolution complete. $(wc -l < "$PUREDNS_FILE") subdomains were successfully resolved."
+                 
           wget https://raw.githubusercontent.com/Pcoder7/puredns-bruteforce/refs/heads/main/.scope
-           
-          cat "$PUREDNS_FILE" | inscope -s .scope > "$RESOLVED_FILE" || true
           
-          # This step is redundant if puredns is run with a single domain, but good for santization.
-          cat "$RESOLVED_FILE" | inscope -s .scope > temp_resolved.txt && mv temp_resolved.txt "$RESOLVED_FILE"
+          echo "Checking scope file for '$DOMAIN'..."
+          cat .scope | head -n5
+          
+          cat "$PUREDNS_FILE" | inscope -s .scope > "$RESOLVED_FILE" || true
 
           if [ ! -s "$MASSDNS" ]; then
             echo "INFO: MassDNS file is empty. Skipping enrichment."
