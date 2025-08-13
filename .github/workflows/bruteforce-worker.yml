@@ -313,3 +313,72 @@ jobs:
           # Upload the entire results directory for this job
           path: results/
           retention-days: 1
+
+  merge_results:
+    name: Merge All Bruteforce Results
+    runs-on: ubuntu-latest
+    needs: process_assigned_chunks_tertiary
+    if: always() # Run even if some runners fail to merge partial results
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Download all result artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: 'bruteforce-results-*'
+          path: temp-results
+          merge-multiple: true
+
+      # --- THIS IS THE NEW, CORRECT CONSOLIDATION STEP ---
+      - name: Consolidate all results
+        id: consolidate
+        shell: bash
+        run: |
+          # Create the final destination directory
+          mkdir -p final_results
+          
+          # Check if any artifacts were downloaded at all
+          if [ ! -d "temp-results" ] || [ -z "$(ls -A temp-results)" ]; then
+            echo "::warning:: No result artifacts were found to merge."
+            exit 0
+          fi
+          
+          echo "INFO: Aggregating all downloaded results into final folders..."
+          
+          # --- Process puredns_results.txt files ---
+          # 1. Find all files with this name anywhere inside temp-results
+          for filepath in $(find temp-results -type f -name "puredns_results.txt"); do
+            # 2. Get the parent directory name (which is the root domain, e.g., "navy.mil")
+            parent_domain=$(basename "$(dirname "$filepath")")
+            # 3. Create a corresponding directory in our final output
+            mkdir -p "final_results/$parent_domain"
+            # 4. Append the contents of the found file to the final, consolidated file
+            cat "$filepath" >> "final_results/$parent_domain/puredns_results.txt"
+          done
+
+          # --- Process subdomain_ports.txt files (same logic) ---
+          for filepath in $(find temp-results -type f -name "subdomain_ports.txt"); do
+            parent_domain=$(basename "$(dirname "$filepath")")
+            mkdir -p "final_results/$parent_domain"
+            cat "$filepath" >> "final_results/$parent_domain/subdomain_ports.txt"
+          done
+          
+          echo "INFO: De-duplicating all aggregated files..."
+          # 5. Find every .txt file in the final output directory
+          for final_file in $(find final_results -type f -name "*.txt"); do
+              # 6. Sort it in-place to remove duplicates
+              sort -u -o "$final_file" "$final_file"
+          done
+
+          echo "✅ Successfully consolidated and de-duplicated results from all accounts."
+          echo "Final directory structure:"
+          ls -R final_results
+
+      - name: Upload Final Consolidated Artifact
+        # This step doesn't need to change
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-bruteforce-results
+          path: final_results/
+          retention-days: 1          
