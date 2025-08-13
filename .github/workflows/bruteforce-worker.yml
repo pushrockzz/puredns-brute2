@@ -189,7 +189,8 @@ jobs:
           fi
           
           echo "✅ PureDNS resolution complete. $(wc -l < "$PUREDNS_FILE") subdomains were successfully resolved."
-
+          wget https://raw.githubusercontent.com/Pcoder7/puredns-bruteforce/refs/heads/main/.scope
+           
           cat "$PUREDNS_FILE" | inscope -s .scope > "$RESOLVED_FILE" || true
           
           # This step is redundant if puredns is run with a single domain, but good for santization.
