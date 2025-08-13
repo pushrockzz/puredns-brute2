@@ -332,22 +332,44 @@ jobs:
         id: safe_name
         shell: bash
         run: |
+          # Creates a unique name like 'navy_mil_chunks_wordlist_chunk_0001'
           SAFE_NAME=$(echo "${{ matrix.pair.domain }}_${{ matrix.pair.chunk }}" | tr '/.' '_')
           echo "safe_name=$SAFE_NAME" >> $GITHUB_OUTPUT
       
+      # --- NEW STEP: Stage results with unique filenames ---
+      - name: Prepare Staging Directory for Upload
+        shell: bash
+        run: |
+          # This name is already unique to the runner
+          SAFE_NAME="${{ steps.safe_name.outputs.safe_name }}"
+
+          mkdir -p staging
+
+          # Copy result files into the staging dir with unique names
+          if [ -s "puredns_results.txt" ]; then
+            # Creates a file like 'staging/navy_mil_chunk_1_puredns.txt'
+            cp "puredns_results.txt" "staging/${SAFE_NAME}___puredns.txt"
+          fi
+          if [ -s "subdomain_ports.txt" ]; then
+            # Creates a file like 'staging/navy_mil_chunk_1_ports.txt'
+            cp "subdomain_ports.txt" "staging/${SAFE_NAME}___ports.txt"
+          fi
+
+      # --- MODIFIED STEP: Upload from the clean staging directory ---
       - name: Upload Results Artifact
         uses: actions/upload-artifact@v4
         with:
+          # The artifact name itself is still unique, which is good practice
           name: bruteforce-results-primary-${{ steps.safe_name.outputs.safe_name }}
-          # Upload the entire results directory for this job
-          path: results/
+          # The path now points to our staging directory
+          path: staging/
           retention-days: 1
 
   merge_results:
     name: Merge All Bruteforce Results
     runs-on: ubuntu-latest
-    needs: process_assigned_chunks
-    if: always() # Run even if some runners fail to merge partial results
+    needs: bruteforce_primary_chunks # Or your previous job name
+    if: always()
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -364,39 +386,41 @@ jobs:
         id: consolidate
         shell: bash
         run: |
-          # Create the final destination directory
           mkdir -p final_results
           
-          # Check if any artifacts were downloaded at all
           if [ ! -d "temp-results" ] || [ -z "$(ls -A temp-results)" ]; then
             echo "::warning:: No result artifacts were found to merge."
             exit 0
           fi
           
-          echo "INFO: Aggregating all downloaded results into final folders..."
+          echo "INFO: Aggregating all downloaded results..."
           
-          # --- Process puredns_results.txt files ---
-          # 1. Find all files with this name anywhere inside temp-results
-          for filepath in $(find temp-results -type f -name "puredns_results.txt"); do
-            # 2. Get the parent directory name (which is the root domain, e.g., "navy.mil")
-            parent_domain=$(basename "$(dirname "$filepath")")
-            # 3. Create a corresponding directory in our final output
-            mkdir -p "final_results/$parent_domain"
-            # 4. Append the contents of the found file to the final, consolidated file
-            cat "$filepath" >> "final_results/$parent_domain/puredns_results.txt"
-          done
-
-          # --- Process subdomain_ports.txt files (same logic) ---
-          for filepath in $(find temp-results -type f -name "subdomain_ports.txt"); do
-            parent_domain=$(basename "$(dirname "$filepath")")
-            mkdir -p "final_results/$parent_domain"
-            cat "$filepath" >> "final_results/$parent_domain/subdomain_ports.txt"
+          # Loop through every file in the downloaded results
+          for filepath in temp-results/*; do
+            # Get just the filename, e.g., 'navy_mil_chunk_1___puredns.txt'
+            filename=$(basename "$filepath")
+            
+            # Use sed to extract the root domain from the filename.
+            # It captures everything from the start of the line up to the '___' delimiter.
+            # Then it replaces underscores back to dots.
+            root_domain=$(echo "$filename" | sed -E 's/^(.*)___.*/\1/' | tr '_' '.')
+            
+            # Check if we successfully extracted a domain
+            if [ -n "$root_domain" ]; then
+              # Create the final directory for this domain
+              mkdir -p "final_results/$root_domain"
+              
+              # Check if it's a puredns file or a ports file and append it
+              if [[ "$filename" == *___puredns.txt ]]; then
+                cat "$filepath" >> "final_results/$root_domain/puredns_results.txt"
+              elif [[ "$filename" == *___ports.txt ]]; then
+                cat "$filepath" >> "final_results/$root_domain/subdomain_ports.txt"
+              fi
+            fi
           done
           
           echo "INFO: De-duplicating all aggregated files..."
-          # 5. Find every .txt file in the final output directory
           for final_file in $(find final_results -type f -name "*.txt"); do
-              # 6. Sort it in-place to remove duplicates
               sort -u -o "$final_file" "$final_file"
           done
 
@@ -405,9 +429,8 @@ jobs:
           ls -R final_results
 
       - name: Upload Final Consolidated Artifact
-        # This step doesn't need to change
         uses: actions/upload-artifact@v4
         with:
           name: final-bruteforce-results
           path: final_results/
-          retention-days: 1          
+          retention-days: 1    
