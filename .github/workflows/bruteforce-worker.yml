@@ -104,54 +104,213 @@ jobs:
         shell: bash
         run: |
           PACKAGE_FILENAME="${{ github.event.inputs.chunk_package_artifact_name }}.tar.gz"
-          echo "WORKER: Extracting $PACKAGE_FILENAME..."
+          echo "TERTIARY WORKER: Extracting $PACKAGE_FILENAME..."
           tar -xzvf "$PACKAGE_FILENAME"
-          # Verify that the core components for the bruteforce exist
           if [ ! -d "chunks" ] || [ ! -f "targets.txt" ] || [ ! -f "resolvers-trusted.txt" ]; then
             echo "::error:: 'chunks/', 'targets.txt', or 'resolvers-trusted.txt' missing after extraction."
             exit 0
           fi
           echo "SUCCESS: Extraction complete."
 
-      # --- This is the core logic that matches the primary worker ---
-      - name: Run puredns bruteforce on (domain, chunk) pair
-        shell: bash
+      - name: Install Tools
         run: |
-        
-          # Get the specific domain and chunk for this matrix job
-          
-          DOMAIN="${{ matrix.pair.domain }}"
-          CHUNK_FILE="${{ matrix.pair.chunk }}"
-          PUREDNS_RESULT="$(mktemp)"
-
-          echo "INFO: This runner will process chunk '$CHUNK_FILE' against domain '$DOMAIN'."
-          
-          # The puredns command now takes a single domain as an argument
-          
-          cat "$CHUNK_FILE" | puredns bruteforce "$DOMAIN" -r resolvers-trusted.txt --skip-validation --skip-wildcard-filter --rate-limit 5000 --write "$PUREDNS_RESULT"
-
-          cat "$PUREDNS_RESULT" | sort -u > puredns_results.txt
-          # Ensure artifact upload doesn't fail if no results are found
-          
-          if [ ! -s "puredns_results.txt" ]; then
-            echo "INFO: No results found for this pair."
-            touch puredns_results.txt
+          # Installing smap
+          if ! command -v smap >/dev/null; then
+            echo "Installing smap…"
+            go install -v github.com/s0md3v/smap/cmd/smap@latest
           else
-            echo "SUCCESS: Found $(wc -l < puredns_results.txt) subdomains for $DOMAIN."
+            echo "smap already in cache"
+          fi    
+          # Installing inscope
+          if ! command -v inscope >/dev/null; then
+            echo "Installing inscope…"
+            go install -v github.com/tomnomnom/hacks/inscope@latest
+          else
+            echo "inscope already in cache"
+          fi    
+          
+          if ! command -v anew >/dev/null; then
+            echo "Installing anew…"
+            go install -v github.com/tomnomnom/anew@latest
+          else
+            echo "anew already in cache"
+          fi
+          
+          if ! command -v cut-cdn >/dev/null; then
+            echo "Installing cut-cdn…"
+            go install github.com/ImAyrix/cut-cdn@latest
+          else
+            echo "cut-cdn already in cache"
+          fi     
+
+          if ! command -v naabu >/dev/null; then
+            echo "Installing naabu…"
+            go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+          else
+            echo "naabu already in cache"
           fi
 
-      - name: Create Safe Chunk Name for Artifact
+          pip3 install --no-cache-dir ipaddress
+          
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+          
+      - name: Resolve Discovered Subdomains with PureDNS
+        id: run_puredns
+        shell: bash
+        run: |
+          DOMAIN="${{ matrix.pair.domain }}"
+          CHUNK_FILE="${{ matrix.pair.chunk }}"
+          PUREDNS_FILE="puredns_file.txt"
+          # Define all filenames as requested
+          RESOLVED_FILE="puredns_resolved.txt"
+          MASSDNS="massdns.txt"
+          MASSDNS_FILE="massdns_file.txt"
+          TMP_CLEANMASSDNS=$(mktemp)
+
+          echo "Checking scope file for '$DOMAIN'..."
+          cat .scope | head -n5
+          
+          echo "INFO: Resolving subdomains for '$DOMAIN' using chunk '$CHUNK_FILE'..."
+          # The puredns command is now updated with --write-massdns
+          cat "$CHUNK_FILE" | puredns bruteforce "$DOMAIN" \
+            -r resolvers-trusted.txt \
+            --rate-limit 5000 \
+            --skip-validation \
+            --skip-wildcard-filter \
+            --write "$PUREDNS_FILE" \
+            --write-massdns "$MASSDNS" \
+            --quiet
+          
+          if [ ! -s "$PUREDNS_FILE" ]; then
+            echo "INFO: No subdomains were resolved. Exiting this job."
+            # Create empty files to prevent downstream errors
+            touch "$RESOLVED_FILE" "$MASSDNS_FILE" "$PUREDNS_FILE"
+            exit 0
+          fi
+          
+          echo "✅ PureDNS resolution complete. $(wc -l < "$PUREDNS_FILE") subdomains were successfully resolved."
+
+          cat "$PUREDNS_FILE" | inscope -s .scope > "$RESOLVED_FILE" || true
+          
+          # This step is redundant if puredns is run with a single domain, but good for santization.
+          cat "$RESOLVED_FILE" | inscope -s .scope > temp_resolved.txt && mv temp_resolved.txt "$RESOLVED_FILE"
+
+          if [ ! -s "$MASSDNS" ]; then
+            echo "INFO: MassDNS file is empty. Skipping enrichment."
+            touch "$MASSDNS_FILE"
+            exit 0
+          fi
+
+          awk 'NF { sub(/\.$/,"",$1); print }' "$MASSDNS" > "$TMP_CLEANMASSDNS"
+
+          awk ' \
+          {gsub(/\r$/,"");sub(/^[ \t]+/,"");sub(/[ \t]+$/,"")} \
+          FNR==NR{if($0)patterns[++c]=$0;next} \
+          !setup{regex="";for(i=1;i<=c;i++){regex=regex (i>1?"|":"") "("patterns[i]")"};if(regex=="")regex="^\b$";setup=1} \
+          $2=="A" && $1~regex \
+          ' .scope "$TMP_CLEANMASSDNS" | anew -q "$MASSDNS_FILE"
+          
+          echo "✅ MassDNS processing complete. $(wc -l < "$MASSDNS_FILE") in-scope A-records found."
+          
+          rm -f "$TMP_CLEANMASSDNS" "$MASSDNS"
+
+      - name: Map subdomains to ports with CDN filtering
+        id: map_subdomains_cdn
+        shell: bash
+        run: |
+          # This block is nearly identical to your provided logic, ensuring it runs as intended.
+          set -e
+          trap '' SIGPIPE
+
+          MASSDNS_FILE="massdns_file.txt"
+          SMAP_FILE="smap.txt"
+          OUTPUT="subdomain_ports.txt"
+          
+          if [ ! -s "$MASSDNS_FILE" ]; then
+            echo "INFO: massdns_file.txt is empty. Skipping port mapping."
+            touch "$OUTPUT"
+            exit 0
+          fi
+          
+          TMP_IP2SUB=$(mktemp)
+          TMP_IP_ONLY=$(mktemp)
+          TMP_NONCDN=$(mktemp)
+          TMP_CDN=$(mktemp)
+          TMP_SMAP_NONCDN=$(mktemp)
+          TMP_RUSTSCAN=$(mktemp)
+
+          echo "▶ Cleaning & extracting A‑records from $MASSDNS_FILE…"
+          awk '{ print $3, $1 }' "$MASSDNS_FILE" | sort -k1,1 > "$TMP_IP2SUB"
+
+          echo "▶ Pulling unique IPs…"
+          cut -d' ' -f1 "$TMP_IP2SUB" | sort -u > "$TMP_IP_ONLY"
+
+          echo "▶ Filtering non‑CDN IPs with cut-cdn…"
+          cat "$TMP_IP_ONLY" | cut-cdn -ua -t 50 -silent -o "$TMP_NONCDN"
+
+          echo "▶ Deriving CDN IP list…"
+          cat "$TMP_IP_ONLY" | anew -d "$TMP_NONCDN" > "$TMP_CDN"
+
+          echo "▶ Running rustscan on non‑CDN IPs…"
+          rustscan -a "$TMP_NONCDN" -p 80,443 --no-banner -t 1000 --tries 1 -u 20000 --scan-order "Random" -b 100 --greppable --accessible > "$TMP_RUSTSCAN" || true
+          cat "$TMP_RUSTSCAN" | awk -F ' -> ' '{ gsub(/[\[\]]/, "", $2); n = split($2, p, ","); for(i=1;i<=n;i++) print $1 ":" p[i] }' | anew -q "$TMP_SMAP_NONCDN" || true
+          
+          echo "▶ Merging non‑CDN and CDN IP lists into $SMAP_FILE…"
+          cat "$TMP_SMAP_NONCDN" "$TMP_CDN" | sort -u > "$SMAP_FILE"
+
+          echo "▶ Joining with $SMAP_FILE to produce final output..."
+          awk -F: '
+            NF==2 { print $1, $2 }
+            NF==1 { print $1, ""  }
+          ' "$SMAP_FILE" \
+            | sort -k1,1 \
+            | join - "$TMP_IP2SUB" \
+            | { 
+              awk '
+                NF >= 2 { 
+                  if (NF == 3 && $2 ~ /^[0-9]+$/) { 
+                    print $3 ":" $2 
+                  } else { 
+                    print $NF 
+                  } 
+                }
+              '       
+            } \
+            > "$OUTPUT"
+
+          echo "✅ Generated $OUTPUT with $(wc -l < $OUTPUT) entries."
+          rm -f "$TMP_IP2SUB" "$TMP_IP_ONLY" "$TMP_NONCDN" "$TMP_CDN" "$TMP_SMAP_NONCDN" "$TMP_RUSTSCAN"
+
+      - name: Sort Resolved Results into Root Domain Folders
+        shell: bash
+        run: |
+          DOMAIN="${{ matrix.pair.domain }}"
+          RESOLVED_FILE="puredns_resolved.txt"
+          PORTS_INPUT_FILE="subdomain_ports.txt"
+        
+          mkdir -p "results/$DOMAIN"
+          
+          if [ -s "$RESOLVED_FILE" ]; then
+            echo "  -> Copying puredns results for '$DOMAIN'"
+            cp "$RESOLVED_FILE" "results/$DOMAIN/puredns_results.txt"
+          fi
+
+          if [ -s "$PORTS_INPUT_FILE" ]; then
+            echo "  -> Copying port data for '$DOMAIN'"
+            cp "$PORTS_INPUT_FILE" "results/$DOMAIN/subdomain_ports.txt"
+          fi
+
+      - name: Create Safe Name for Artifact
         id: safe_name
         shell: bash
         run: |
-          SAFE_CHUNK_NAME=$(echo "${{ matrix.pair.chunk }}" | tr '/' '_')
-          echo "safe_chunk_name=$SAFE_CHUNK_NAME" >> $GITHUB_OUTPUT
-
-      - name: Upload Worker Results
+          SAFE_NAME=$(echo "${{ matrix.pair.domain }}_${{ matrix.pair.chunk }}" | tr '/.' '_')
+          echo "safe_name=$SAFE_NAME" >> $GITHUB_OUTPUT
+      
+      - name: Upload Results Artifact
         uses: actions/upload-artifact@v4
         with:
-          # The name MUST follow the 'bruteforce-results-*' pattern
-          # We add '-secondary' to easily identify its origin during debugging
-          name: bruteforce-results-secondary-${{ steps.safe_name.outputs.safe_chunk_name }}
-          path: puredns_results.txt
+          name: bruteforce-results-primary-${{ steps.safe_name.outputs.safe_name }}
+          # Upload the entire results directory for this job
+          path: results/
           retention-days: 1
