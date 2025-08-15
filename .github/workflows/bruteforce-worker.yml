@@ -431,3 +431,80 @@ jobs:
           name: final-bruteforce-results
           path: final_results/
           retention-days: 1
+ 
+  commit_results:
+    name: Commit Puredns Bruteforce Results
+    needs: merge_results
+    if: needs.merge_results.outputs.has_results == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the final consolidated bruteforce results
+        uses: actions/download-artifact@v4
+        with:
+          name: final-bruteforce-results
+          path: final_results
+  
+      - name: Organize and Push to store-recon    
+        shell: bash
+        env:
+          STORE_RECON_PAT: ${{ secrets.PAT_FOR_SECONDARY_ACCOUNT_REPO }}
+          ACCOUNT2_USERNAME: ${{ secrets.ACCOUNT2_REPO_OWNER }}
+          STORE: ${{ secrets.STORE }}
+          CORRELATION_ID: ${{ github.event.inputs.primary_run_id }}
+        run: |
+          set -e
+          RESULTS_DIR="${GITHUB_WORKSPACE}/final_results"
+          if [ ! -d "$RESULTS_DIR" ] || [ -z "$(ls -A "$RESULTS_DIR")" ]; then
+            echo "::warning:: Results directory is empty. Nothing to commit."
+            exit 0
+          fi
+          
+          echo "Cloning ${{ env.STORE }} to commit results..."
+          # CHANGE 1: The Git user name is now specific to the Secondary worker.
+          git config --global user.name "Secondary-Puredns-Bruteforce Bot"
+          git config --global user.email "actions-bot@users.noreply.github.com"
+          
+          TMP_DIR="$(mtemp -d)"
+          git clone "https://x-access-token:${STORE_RECON_PAT}@github.com/${ACCOUNT2_USERNAME}/${STORE}.git" "$TMP_DIR"
+          cd "$TMP_DIR"
+          
+          echo "Merging new consolidated results into the repository..."
+          for domain_dir in "${RESULTS_DIR}"/*; do
+            if [ ! -d "$domain_dir" ]; then continue; fi
+            
+            domain_name=$(basename "$domain_dir")
+            dest_repo_dir="results/$domain_name"
+            mkdir -p "$dest_repo_dir"
+            
+            # The merge logic for files remains identical.
+            source_puredns_file="$domain_dir/puredns_results.txt"
+            dest_all_subs_file="$dest_repo_dir/all_subdomains.txt"
+            if [ -s "$source_puredns_file" ]; then
+              echo "  -> Merging puredns results for '$domain_name' into '$dest_all_subs_file'"
+              temp_merged_file_1=$(mktemp)
+              cat "$source_puredns_file" "$dest_all_subs_file" 2>/dev/null | sort -u > "$temp_merged_file_1"
+              mv "$temp_merged_file_1" "$dest_all_subs_file"
+            fi
+            
+            source_ports_file="$domain_dir/subdomain_ports.txt"
+            dest_puredns_file="$dest_repo_dir/puredns_result.txt"
+            if [ -s "$source_ports_file" ]; then
+              echo "  -> Merging port data for '$domain_name' into '$dest_puredns_file'"
+              temp_merged_file_2=$(mktemp)
+              cat "$source_ports_file" "$dest_puredns_file" 2>/dev/null | sort -u > "$temp_merged_file_2"
+              mv "$temp_merged_file_2" "$dest_puredns_file"
+            fi
+          done
+          
+          if git diff --cached --quiet && git diff --quiet; then
+            echo "No new unique data found to commit."
+            exit 0
+          fi
+
+          # CHANGE 2: The logging and commit message are now specific to the Secondary worker.
+          echo "Committing and pushing changes from secondary worker to ${STORE}..."
+          git add results/
+          git commit -m "feat(worker-secondary): Puredns bruteforce assets from Correlation ID: ${CORRELATION_ID}"
+          git push
+          
+          echo "✅ Successfully pushed new bruteforce results to ${{ env.STORE }}."
