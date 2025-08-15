@@ -476,7 +476,7 @@ jobs:
           git config --global user.name "Secondary-Puredns-Bruteforce Bot"
           git config --global user.email "actions-bot@users.noreply.github.com"
           
-          TMP_DIR="$(mtemp -d)"
+          TMP_DIR="$(mktemp -d)"
           git clone "https://x-access-token:${STORE_RECON_PAT}@github.com/${ACCOUNT2_USERNAME}/${STORE}.git" "$TMP_DIR"
           cd "$TMP_DIR"
           
