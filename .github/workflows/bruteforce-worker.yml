@@ -372,6 +372,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: process_assigned_chunks # Or your previous job name
     if: always()
+    outputs:
+      has_results: ${{ steps.consolidate.outputs.has_results }}    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -391,6 +393,7 @@ jobs:
           
           if [ ! -d "temp-results" ] || [ -z "$(ls -A temp-results)" ]; then
             echo "::warning:: No result artifacts were found to merge."
+            echo "has_results=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
@@ -421,9 +424,18 @@ jobs:
               sort -u -o "$final_file" "$final_file"
           done
 
-          echo "✅ Successfully consolidated and de-duplicated results."
+          if [ -n "$(ls -A final_results)" ]; then
+            echo "✅ Successfully consolidated results."
+            echo "has_results=true" >> $GITHUB_OUTPUT
+          else
+            echo "::warning:: Consolidation resulted in no final data."
+            echo "has_results=false" >> $GITHUB_OUTPUT
+          fi
+
           echo "Final directory structure:"
           ls -R final_results
+
+          
 
       - name: Upload Final Consolidated Artifact
         uses: actions/upload-artifact@v4
