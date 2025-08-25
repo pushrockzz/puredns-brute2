@@ -445,7 +445,7 @@ jobs:
   commit_results:
     name: Commit Puredns Bruteforce Results
     needs: merge_results
-    if: needs.merge_results.outputs.has_results == 'true'
+    if: always() && needs.merge_results.outputs.has_results == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Download the final consolidated bruteforce results
