@@ -317,22 +317,23 @@ jobs:
 
       - name: Sort Resolved Results into Root Domain Folders
         shell: bash
-        run: |
+        run: |         
           DOMAIN="${{ matrix.pair.domain }}"
           RESOLVED_FILE="puredns_resolved.txt"
           PORTS_INPUT_FILE="subdomain_ports.txt"
         
+          # Ensure source files exist, even if empty, to guarantee the next steps run.
+          touch "$RESOLVED_FILE"
+          touch "$PORTS_INPUT_FILE"
+          
           mkdir -p "results/$DOMAIN"
           
-          if [ -s "$RESOLVED_FILE" ]; then
-            echo "  -> Copying puredns results for '$DOMAIN'"
-            cp "$RESOLVED_FILE" "results/$DOMAIN/puredns_results.txt"
-          fi
-
-          if [ -s "$PORTS_INPUT_FILE" ]; then
-            echo "  -> Copying port data for '$DOMAIN'"
-            cp "$PORTS_INPUT_FILE" "results/$DOMAIN/subdomain_ports.txt"
-          fi
+          # Removed the 'if' conditions to ensure files are always copied.
+          echo "  -> Copying puredns results for '$DOMAIN'"
+          cp "$RESOLVED_FILE" "results/$DOMAIN/puredns_results.txt"
+          
+          echo "  -> Copying port data for '$DOMAIN'"
+          cp "$PORTS_INPUT_FILE" "results/$DOMAIN/subdomain_ports.txt"
 
       - name: Create Safe Name for Artifact
         id: safe_name
@@ -348,27 +349,18 @@ jobs:
           SAFE_NAME="${{ steps.safe_name.outputs.safe_name }}"
           DOMAIN="${{ matrix.pair.domain }}"
           
-          # Create a clean directory for this runner's upload
           mkdir -p staging
-
-          # This logic now correctly finds the files created by the previous step
-          # in the 'results/$DOMAIN/' directory.
           
-          if [ -s "results/$DOMAIN/puredns_results.txt" ]; then
-            # Copies the file to a unique name like 'staging/navy_mil_...___puredns.txt'
-            cp "results/$DOMAIN/puredns_results.txt" "staging/${SAFE_NAME}___puredns.txt"
-          fi
-          
-          if [ -s "results/$DOMAIN/subdomain_ports.txt" ]; then
-            # Copies the file to a unique name like 'staging/navy_mil_...___ports.txt'
-            cp "results/$DOMAIN/subdomain_ports.txt" "staging/${SAFE_NAME}___ports.txt"
-          fi
+          # Removed 'if' conditions. The previous step now guarantees these files exist.
+          # This will copy the file into the staging area, even if it's empty.
+          cp "results/$DOMAIN/puredns_results.txt" "staging/${SAFE_NAME}___puredns.txt"
+          cp "results/$DOMAIN/subdomain_ports.txt" "staging/${SAFE_NAME}___ports.txt"
 
       - name: Upload Results Artifact
         uses: actions/upload-artifact@v4
         with:
           # The artifact name itself is still unique, which is good practice
-          name: bruteforce-results-primary-${{ steps.safe_name.outputs.safe_name }} # (or -secondary-, -tertiary-)
+          name: bruteforce-results-primary-${{ steps.safe_name.outputs.safe_name }}
           # The path now points to our flat staging directory with unique files
           path: staging/
           retention-days: 1
